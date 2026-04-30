@@ -1,0 +1,37 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+venv/
+env/
+.venv/
+
+# Generated dataset (regenerate with: python3 dataset/generate_dataset.py --seed-dir dataset --out expanded)
+expanded/
+
+# Local logs
+*.log
+/tmp/*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+# IDE
+.vscode/
+.idea/
+*.swp

@@ -248,6 +248,7 @@ async def reply(body: ReplyBody):
         message=body.message,
         turn_number=body.turn_number,
         customer=customer,
+        from_role=body.from_role,
     )
 
     act = action.get("action", "wait")
@@ -275,6 +276,9 @@ async def reply(body: ReplyBody):
         response["cta"] = action.get("cta", "open_ended")
     elif act == "wait":
         response["wait_seconds"] = action.get("wait_seconds", 3600)
+    elif act == "end" and action.get("body", "").strip():
+        # Include polite closing body when LLM provides one (e.g. hostile/off-topic acknowledgment)
+        response["body"] = action["body"].strip()
     return response
 
 

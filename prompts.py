@@ -13,6 +13,14 @@ RUBRIC = """## SCORING DIMENSIONS (0–10 each, total 50) — these are the EXAC
    YES: "JIDA's Oct issue just landed — one item directly relevant to your high-risk adult patients."
    The trigger must be the visible, named reason the message was sent today, not next week.
 
+DECISION QUALITY (highest leverage — fill decision_reasoning FIRST):
+   This is scored on the QUALITY OF YOUR REASONING, not just the output. The judge reads decision_reasoning.
+   - Pick ONE signal — the most time-sensitive trigger field, merchant metric, or category beat.
+   - State WHY THIS MERCHANT, WHY TODAY. Not "orders are down" — "orders down 32% vs last month + 3 new competitors opened this week = urgent".
+   - State what SPECIFIC ACTION this signal prescribes (not just "help them" — "run a Weekday Thali offer targeting the office lunch crowd now, before competitors capture that slot").
+   - Bad: "The merchant has low orders so I'll suggest improvements."
+   - Good: "Orders -32% MoM + 3 new restaurant competitors + IPL season = merchant risks losing lunch crowd permanently. Prescribing a priced Weekday Thali + delivery-only BOGO for match nights this week."
+
 2. Specificity — Every claim must be grounded in provided data: numbers, dates, named sources, citations. ALL anchors must be VERIFIABLE in the context you were given.
    - "2,100-patient trial" > "a large study"
    - "JIDA Oct 2026, p.14" > "a recent paper"
@@ -408,6 +416,321 @@ def get_voice(category_slug: str) -> str:
     return CATEGORY_VOICE.get(category_slug, "")
 
 
+# ─── Few-shot compose examples (one per category, grounded in dataset) ────────
+# Each example shows 10/10 quality: specific decision_reasoning, verifiable
+# key_facts, correct salutation, category voice, single CTA in last sentence.
+
+_FEW_SHOT_COMPOSE_EXAMPLES: dict[tuple[str, str], dict] = {
+
+    ("dentists", "research_digest"): {
+        "input": """\
+MERCHANT: Dr. Meera's Dental Clinic | Lajpat Nagar, Delhi | Est. 2018
+Owner first name (USE THIS in salutation): Meera
+Plan: Pro (82 days remaining) | Status: active
+
+PERFORMANCE (30d): Views 2410 (+18%) | Calls 18 (-5%) | CTR 2.1% | Leads 9 | Directions 45
+SIGNALS (use these to ground WHY NOW): CTR below peer average
+ACTIVE OFFERS: Dental Cleaning @ ₹299
+CUSTOMER COHORTS: Total unique YTD: 240 | Lapsed 180d+: 28 | 6mo retention: 42% | high risk adult: 22
+
+CATEGORY: Dentists
+Voice tone: peer_clinical | Register: respectful_collegial | Code-mix: hindi_english_natural
+Vocab USE: fluoride varnish, scaling, caries, recall interval, endodontic, periodontal
+Vocab taboo: guaranteed, 100% safe, miracle, best in city
+Salutation (USE EXACTLY): Dr. {first_name} | Doc
+Tone examples: Worth a look — JIDA Oct 2026 p.14 | This one likely affects your high-risk adult cohort | If your case-mix is mostly cosmetic, may not be relevant
+
+PEER BENCHMARKS: Rating 4.4 | Reviews 62 | CTR 3.0% | Views/30d 1820 | Calls/30d 12 | 6mo retention 42%
+
+TOP-RANKED DIGEST ITEMS (cite source+title EXACTLY):
+  [d_2026W17_jida_fluoride] RESEARCH: "3-month fluoride varnish recall outperforms 6-month for high-risk adult caries" (n=2100) | Source: JIDA Oct 2026, p.14 | Segment: high_risk_adults | Actionable: Reassess recall interval for adults flagged high-risk in your charting
+    Key finding (quote specific numbers): Multi-center Indian trial shows 38% lower caries recurrence with 3-month vs 6-month recall in adults with active decay history. No effect in low-risk patients.
+
+REGULATORY AUTHORITIES: Dental Council of India (DCI) | Indian Dental Association (IDA)
+PROFESSIONAL JOURNALS: JIDA | Indian Journal of Dental Research | Dental Tribune India
+
+TRIGGER: kind=research_digest | scope=merchant | source=external | urgency=2/5
+Suppression key: research:dentists:2026-W17 | Expires: 2026-05-03T00:00:00Z
+Payload: {"category": "dentists", "top_item_id": "d_2026W17_jida_fluoride"}
+
+CURRENT TIME: 2026-04-30T09:30:00Z (Thursday, IST 15:00)""",
+        "output": {
+            "decision_reasoning": (
+                "JIDA Oct 2026 p.14 (n=2,100 Indian multi-center trial) shows 38% lower caries recurrence "
+                "with 3-month vs 6-month recall for high_risk_adults — Dr. Meera's charting shows 22 high_risk_adult patients. "
+                "Her CTR (2.1%) is already below peer (3.0%); upgrading these 22 patients to 3-month recall closes two gaps at once: "
+                "better clinical outcomes AND more frequent return visits that lift CTR and calls. "
+                "Timing: JIDA issue is fresh this week — citing it now is collegial and credible, not sales-y."
+            ),
+            "key_facts": [
+                "38% lower caries recurrence with 3-month recall vs 6-month (JIDA Oct 2026, p.14, n=2,100)",
+                "22 high_risk_adult patients in Dr. Meera's charting",
+                "CTR 2.1% vs peer median 3.0%",
+                "Dental Cleaning @ ₹299 (active offer)",
+            ],
+            "body": (
+                "Dr. Meera, quick flag — JIDA Oct 2026 (p.14) just published a 2,100-patient Indian trial: "
+                "3-month fluoride recall shows 38% lower caries recurrence for high-risk adults vs 6-month. "
+                "Likely relevant to 22 of your patients already flagged high-risk in your charting. "
+                "Want me to pull the abstract and draft a revised recall protocol + a patient outreach note for them?"
+            ),
+            "cta": "binary_yes_no",
+            "send_as": "vera",
+            "template_name": "vera_research_digest_v1",
+            "template_params": ["Dr. Meera", "JIDA Oct 2026", "38%", "22"],
+            "suppression_key": "research:dentists:2026-W17",
+            "rationale": "JIDA Oct 2026 (n=2,100) finding maps directly to 22 high-risk adult patients — 38% caries reduction cited with source, recall upgrade offered.",
+        },
+    },
+
+    ("restaurants", "review_theme_emerged"): {
+        "input": """\
+MERCHANT: SK Pizza Junction | Lajpat Nagar, Delhi
+Owner first name (USE THIS in salutation): Suresh
+Plan: Basic (45 days remaining) | Status: active
+
+PERFORMANCE (30d): Views 4200 | Calls 8 | CTR 1.8% | Leads 3 | Directions 12
+SIGNALS (use these to ground WHY NOW): Delivery growing, review score dipping
+ACTIVE OFFERS: Pizza BOGO @ ₹499 | Family Combo @ ₹799
+CUSTOMER COHORTS: Total unique YTD: 820 | Delivery orders 30d: 280 | Dine-in orders: 45
+
+CATEGORY: Restaurants
+Voice tone: lively_commercial | Register: casual_operator | Code-mix: none
+Vocab USE: covers, AOV, footfall, dine-in, delivery, BOGO, match-night, lunch rush
+Vocab taboo: cheap, worst
+Salutation (USE EXACTLY): First name (Suresh, Mukesh, Anand)
+Tone examples: Quick heads-up Suresh — DC vs MI tonight 7:30pm. Saturday IPL usually shifts -12% covers... | Short, punchy, operator-to-operator
+
+PEER BENCHMARKS: Rating 4.1 | Reviews 180 | CTR 2.8% | Views/30d 5100 | Calls/30d 18 | 6mo retention 55%
+
+TRIGGER: kind=review_theme_emerged | scope=merchant | source=internal_reviews | urgency=3/5
+Payload: {"theme": "delivery_late", "occurrences_30d": 4, "trend": "rising", "common_quote": "took 50 mins for a 15 min ride"}
+
+CURRENT TIME: 2026-04-30T09:30:00Z (Thursday, IST 15:00)""",
+        "output": {
+            "decision_reasoning": (
+                "4 of SK Pizza Junction's last reviews flag 'delivery_late' with a rising trend and a specific quote "
+                "'took 50 mins for a 15 min ride'. Delivery is 280 of their 325 total monthly orders (86% of revenue channel). "
+                "A rising negative review theme on the dominant channel will collapse their Swiggy/Zomato ranking within weeks — "
+                "far more urgent than the view dip. Prescribing: a 1-line response template for existing reviews (stops the public bleeding) "
+                "plus a delivery zone audit to find which radius is causing the delay."
+            ),
+            "key_facts": [
+                "4 reviews in 30d flag delivery_late (rising trend)",
+                "Customer quote: 'took 50 mins for a 15 min ride'",
+                "280 delivery orders vs 45 dine-in (86% revenue from delivery)",
+                "Pizza BOGO @ ₹499 (active offer)",
+            ],
+            "body": (
+                "Suresh, heads up — 4 of your last reviews flag slow delivery ('took 50 mins for a 15 min ride'), "
+                "and the trend is rising. With 280 of your 325 monthly orders on delivery, this can dent your Swiggy ranking fast. "
+                "Want me to draft a 1-line response template for those reviews + flag which delivery zone is likely causing the delay?"
+            ),
+            "cta": "binary_yes_no",
+            "send_as": "vera",
+            "template_name": "vera_review_theme_emerged_v1",
+            "template_params": ["Suresh", "4", "delivery_late", "280"],
+            "suppression_key": "review:SK_Pizza_Junction:delivery_late:2026-W17",
+            "rationale": "Rising delivery_late theme (4 reviews, 30d) threatens Swiggy ranking for a merchant where 86% of orders are delivery — response template + zone audit prescribed.",
+        },
+    },
+
+    ("pharmacies", "chronic_refill_due"): {
+        "input": """\
+MERCHANT: Apollo Health Plus Pharmacy | Malviya Nagar, Jaipur
+Owner first name (USE THIS in salutation): Ramesh
+Plan: Pro (55 days remaining) | Status: active
+
+PERFORMANCE (30d): Views 1200 | Calls 22 | CTR 2.4% | Leads 8
+ACTIVE OFFERS: Home Delivery in 2hrs | Senior Citizen 15% Discount
+CUSTOMER COHORTS: Total unique YTD: 340 | Repeat: 68% | Chronic Rx: 112
+
+CATEGORY: Pharmacies
+Voice tone: clinical_helpful | Register: trustworthy_precise | Code-mix: hindi_english_natural
+Vocab USE: Rx, OTC, dispense, batch, refill, chronic-Rx, BP, diabetes, dose
+Vocab taboo: guaranteed cure, miracle, best medicine
+Salutation (USE EXACTLY): First name + 'ji' for older owners; 'Sharma ji' / 'Verma ji' for senior customers
+REGULATORY AUTHORITIES: CDSCO | State FDA | Drug Controller General of India (DCGI)
+
+CUSTOMER: Sharma ji (contacted via son's number) | Language pref: hi-en mix | Senior: True
+State: active regular | Age band: 65+ | Last visit: 2026-03-28 | Total visits: 24 | LTV: ₹18,400
+Services received: metformin 500mg, telmisartan 40mg, atorvastatin 10mg
+Preferred slots: morning | Reminder opt-in: True
+Consent scope: refill_reminders, health_tips
+
+TRIGGER: kind=chronic_refill_due | scope=customer | source=internal | urgency=5/5
+Payload: {"molecules": ["metformin 500mg", "telmisartan 40mg", "atorvastatin 10mg"], "last_fill": "2026-03-28", "due_date": "2026-04-28", "senior_discount_pct": 15, "total_mrp": 840, "after_discount": 714, "delivery_by": "5pm tomorrow"}
+
+CURRENT TIME: 2026-04-28T07:00:00Z (Tuesday, IST 12:30)""",
+        "output": {
+            "decision_reasoning": (
+                "Sharma ji's 3 chronic medications (metformin 500mg + telmisartan 40mg + atorvastatin 10mg) are due TODAY (28 April). "
+                "Missing a day for a diabetic+hypertension+statin senior patient is a clinical risk — urgency=5 is correct. "
+                "Contacted via son's number, so message must be relay-ready (son acts on behalf of father). "
+                "Two-channel option (CONFIRM or call) is mandatory for senior relay. "
+                "15% senior discount prominently cited reduces friction. Language: hi-en mix per preference."
+            ),
+            "key_facts": [
+                "Refill due today 28 April: metformin 500mg + telmisartan 40mg + atorvastatin 10mg",
+                "Total ₹840 → ₹714 after 15% senior discount",
+                "Delivery by 5pm tomorrow",
+                "24 prior visits, LTV ₹18,400 (high-value loyal customer)",
+            ],
+            "body": (
+                "Namaste, Apollo Health Plus Pharmacy, Malviya Nagar se.\n"
+                "Sharma ji ki 3 chronic medicines aaj (28 April) refill ke liye ready hain:\n"
+                "• Metformin 500mg\n• Telmisartan 40mg\n• Atorvastatin 10mg\n"
+                "Total: ₹840 → ₹714 (15% senior discount). Delivery by 5pm tomorrow.\n"
+                "Reply CONFIRM to dispatch, ya call karein agar koi change ho dosage mein."
+            ),
+            "cta": "binary_yes_no",
+            "send_as": "merchant_on_behalf",
+            "template_name": "vera_chronic_refill_due_v1",
+            "template_params": ["Sharma ji", "28 April", "metformin 500mg", "telmisartan 40mg", "atorvastatin 10mg", "₹714"],
+            "suppression_key": "refill:c_013_grandfather_for_m009:2026-04",
+            "rationale": "All 3 chronic medications due today for senior diabetic+hypertension patient — discount + delivery + bilingual two-channel option maximizes response from son relay.",
+        },
+    },
+
+    ("salons", "recall_due"): {
+        "input": """\
+MERCHANT: Studio11 Family Salon | Jubilee Hills, Hyderabad
+Owner first name (USE THIS in salutation): Lakshmi
+Plan: Pro (60 days remaining) | Status: active
+
+PERFORMANCE (30d): Views 3100 | Calls 28 | CTR 3.2% | Leads 14
+ACTIVE OFFERS: Bridal Hair Trial @ ₹999 | Keratin Treatment @ ₹2499 | Haircut @ ₹299
+CUSTOMER COHORTS: Total unique YTD: 520 | Lapsed 90d+: 85 | 3mo retention: 58%
+
+CATEGORY: Salons
+Voice tone: warm_practical | Register: friendly_operator | Code-mix: hindi_english_natural
+Vocab USE: bridal, pre-wedding, color-correction, keratin, balayage, slot, walk-in, repeat customer
+Vocab taboo: cheap, boring
+Salutation (USE EXACTLY): First name only (Lakshmi, Anjali, Renu) or with 'ji' for older owners
+Tone examples: Hi Lakshmi! Quick check — what service has been most asked-for this week? | Warm, business-savvy, outcome-focused
+
+CUSTOMER: Kavya | Language pref: hi-en mix | Senior: False
+State: lapsed (soft — visited before, not recently) | Age band: 25-35
+First visit: 2025-09-15 | Last visit: 2025-09-15 | Total visits: 1 | LTV: ₹999
+Services received: Bridal Hair Trial
+Preferred slots: weekday_evening | Reminder opt-in: True
+Consent scope: recall_reminders, promotions
+
+TRIGGER: kind=recall_due | scope=customer | source=internal | urgency=3/5
+Payload: {"service_due": "bridal_followup", "last_service_date": "2025-09-15", "available_slots": [{"iso": "2026-05-06T17:00:00+05:30", "label": "Wed 6 May, 5pm"}, {"iso": "2026-05-07T18:00:00+05:30", "label": "Thu 7 May, 6pm"}]}
+AVAILABLE SLOTS (use multi_choice CTA with these): Reply 1 for Wed 6 May, 5pm | Reply 2 for Thu 7 May, 6pm
+
+CURRENT TIME: 2026-04-30T09:30:00Z (Thursday, IST 15:00)""",
+        "output": {
+            "decision_reasoning": (
+                "Kavya visited Studio11 for a Bridal Hair Trial 7 months ago (Sep 2025) and has not returned — lapsed soft. "
+                "A bridal trial customer is high-intent: either her wedding is upcoming (she needs the pre-wedding package) "
+                "or it passed (warm relationship to maintain for regular services). "
+                "Her language pref is hi-en mix and preferred slots are weekday_evening — both offered slots match. "
+                "Prescribing a warm, no-shame merchant_on_behalf message that connects on the bridal context "
+                "and offers the exact slots with multi_choice CTA to minimize friction."
+            ),
+            "key_facts": [
+                "Kavya's bridal hair trial: 15 Sep 2025 — 7 months ago (lapsed soft)",
+                "Preferred slots: weekday_evening (Wed 6 May 5pm + Thu 7 May 6pm both match)",
+                "Active offers: Bridal Hair Trial @ ₹999, Keratin Treatment @ ₹2499",
+                "Language pref: hi-en mix",
+            ],
+            "body": (
+                "Hi Kavya, Studio11 Family Salon, Jubilee Hills se! "
+                "Aapka bridal hair trial tha hamare saath Sep mein — hope everything went beautifully ✨ "
+                "Kabhi aana chahein — keratin ya regular touch-up ke liye — "
+                "Wed 6 May 5pm ya Thu 7 May 6pm available hai. "
+                "Reply 1 for Wed, 2 for Thu, ya batayein convenient time."
+            ),
+            "cta": "multi_choice",
+            "send_as": "merchant_on_behalf",
+            "template_name": "vera_recall_due_v1",
+            "template_params": ["Kavya", "Studio11 Family Salon", "Wed 6 May 5pm", "Thu 7 May 6pm"],
+            "suppression_key": "recall:c_005_kavya_for_m003:bridal_followup:2026-05",
+            "rationale": "7-month-old bridal trial creates warm re-engagement hook — slots match weekday_evening pref, hi-en mix language, merchant identity opener, multi_choice for slot picking.",
+        },
+    },
+
+    ("gyms", "seasonal_perf_dip"): {
+        "input": """\
+MERCHANT: PowerHouse Fitness | Indiranagar, Bangalore
+Owner first name (USE THIS in salutation): Karthik
+Plan: Pro (38 days remaining) | Status: active
+
+PERFORMANCE (30d): Views 2800 (-30%) | Calls 9 (-33%) | CTR 1.6% | Leads 4
+SIGNALS (use these to ground WHY NOW): Views and calls declining, below peer
+ACTIVE OFFERS: 3-Month Membership @ ₹3999 | 1-Month Trial @ ₹999
+CUSTOMER COHORTS: Total active members: 245 | Monthly churn: 4.2% | Trial-to-paid: 31%
+
+CATEGORY: Gyms
+Voice tone: motivational_peer | Register: coach_operator | Code-mix: none
+Vocab USE: active members, retention, conversion, walk-in, trial, HIIT, batch class, attendance
+Vocab taboo: lazy, worst performance
+Salutation (USE EXACTLY): First name (Karthik, Padma, Akash)
+Tone examples: Karthik, your views are down 30% this week — but flag: this is normal April-June lull... | Coach-to-operator, motivational but evidence-based
+
+PEER BENCHMARKS: Rating 4.2 | CTR 2.4% | Views/30d 3800 | 6mo retention 62%
+SEASONAL BEATS: Apr-Jun: annual lull (-25% to -35% views industry-wide) | Sep-Oct: peak conversion (+40% vs lull)
+
+TRIGGER: kind=seasonal_perf_dip | scope=merchant | source=internal | urgency=3/5
+Payload: {"metric": "views", "delta_pct": -0.30, "benchmark_delta_pct": -0.25, "season": "april_june_lull"}
+
+CURRENT TIME: 2026-04-30T09:30:00Z (Thursday, IST 15:00)""",
+        "output": {
+            "decision_reasoning": (
+                "Views -30% vs industry April-June lull benchmark -25% — slightly below-normal but within the seasonal range. "
+                "The more urgent signal: monthly churn at 4.2% (≈10 members/month lost) with trial-to-paid at 31%. "
+                "During the lull, acquisition spend is wasted (conversion bottoms out) BUT retention is high-leverage: "
+                "each member retained now is worth full Sept-Oct value when conversion jumps +40%. "
+                "Prescribing: save ad spend now, activate a 'summer commitment' campaign targeting trials "
+                "about to expire before the Sept-Oct peak — not a generic promotion."
+            ),
+            "key_facts": [
+                "Views -30% vs industry April-June lull benchmark -25% (within normal range)",
+                "Monthly churn 4.2% = ~10 members/month at risk",
+                "Trial-to-paid 31%; Sept-Oct peak sees +40% conversion",
+                "3-Month Membership @ ₹3999 | 1-Month Trial @ ₹999 (active offers)",
+            ],
+            "body": (
+                "Karthik, flag — views down 30% but this is the normal April-June lull "
+                "(every metro gym sees -25 to -35% during this window, industry-wide). "
+                "The real number to watch: churn at 4.2% means ~10 members leaving per month right now. "
+                "The move isn't ad spend (conversion bottoms out in summer) — "
+                "it's locking in your current trials before Sept-Oct when conversion jumps 40%. "
+                "Want me to draft a 'summer commitment' offer targeting your trials expiring this month?"
+            ),
+            "cta": "binary_yes_no",
+            "send_as": "vera",
+            "template_name": "vera_seasonal_perf_dip_v1",
+            "template_params": ["Karthik", "-30%", "4.2%", "Sept-Oct"],
+            "suppression_key": "perf_dip:PowerHouse_Fitness:2026-Apr-Jun",
+            "rationale": "April-June lull is normal; real risk is 4.2% monthly churn during low-conversion period — trial retention campaign over ad spend is the contrarian-correct call.",
+        },
+    },
+}
+
+
+def get_few_shot_compose_example(category_slug: str, trigger_kind: str) -> Optional[dict]:
+    """Return the best matching few-shot example. Exact match → category match → trigger match → None."""
+    from typing import Optional
+    normalized = _KIND_ALIASES.get(trigger_kind, trigger_kind)
+    # Exact match
+    ex = _FEW_SHOT_COMPOSE_EXAMPLES.get((category_slug, trigger_kind))
+    if not ex:
+        ex = _FEW_SHOT_COMPOSE_EXAMPLES.get((category_slug, normalized))
+    # Category-only fallback (same voice, different trigger)
+    if not ex:
+        ex = next((v for (c, _k), v in _FEW_SHOT_COMPOSE_EXAMPLES.items() if c == category_slug), None)
+    # Trigger-kind-only fallback (different category, same trigger pattern)
+    if not ex:
+        ex = next(
+            (v for (c, k), v in _FEW_SHOT_COMPOSE_EXAMPLES.items() if k == trigger_kind or k == normalized),
+            None,
+        )
+    return ex
+
+
 # ─── Customer-facing reinforcement (used when send_as=merchant_on_behalf) ────
 
 CUSTOMER_FACING_RULES = """## CUSTOMER-FACING DEEP RULES (send_as=merchant_on_behalf):
@@ -507,9 +830,18 @@ FORBIDDEN phrasings in action mode:
 No argument, no retry. Clean exit.
 
 ## HOSTILE / OFF-TOPIC:
-- Strong frustration or abuse: action=end, polite one-liner ("Closing this. You can restart with 'Hi Vera'. 🙏")
-- Off-topic ask (GST, unrelated): decline in one sentence + redirect to original thread
-- Complaint: acknowledge in one sentence + stay on mission
+ALWAYS set body before ending — never a silent close.
+- Strong frustration or abuse: action=end WITH body = polite one-liner ("Closing this for now — you can restart with 'Hi Vera' anytime. 🙏")
+- Off-topic ask (GST, returns, unrelated): action=send, body = one sentence acknowledging + redirect ("I can't help with GST filing, but happy to get back to [original topic] — want me to continue?")
+- Complaint about Vera/magicpin: action=send, acknowledge in one sentence, stay on mission
+
+## FROM_ROLE — CRITICAL:
+- from_role=merchant: reply as Vera to the merchant (normal flow)
+- from_role=customer: The CUSTOMER is replying. Reply DIRECTLY to the customer.
+  - Use the customer's name (from CUSTOMER context)
+  - Confirm their request directly to them ("Your booking for Wed 5 Nov 6pm is set!")
+  - Do NOT address the merchant. Do NOT say "Dr. Meera, reply CONFIRM"
+  - action=send with a warm, direct customer-facing confirmation
 
 ## TURN BUDGET:
 - Turn 4: start wind-down if no progress

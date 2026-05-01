@@ -38,7 +38,7 @@ class BotState:
         async with self._lock:
             key = (scope, ctx_id)
             cur = self.contexts.get(key)
-            if cur and cur["version"] >= version:
+            if cur and cur["version"] > version:
                 return False, cur["version"]
             self.contexts[key] = {"version": version, "payload": payload}
             return True, None

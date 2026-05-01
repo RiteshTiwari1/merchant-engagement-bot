@@ -6,7 +6,7 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
-from prompts import RUBRIC, HARD_RULES, WINNING_PATTERNS, REPLY_SYSTEM, CUSTOMER_FACING_RULES, get_voice, get_playbook
+from prompts import RUBRIC, HARD_RULES, WINNING_PATTERNS, REPLY_SYSTEM, CUSTOMER_FACING_RULES, get_voice, get_playbook, get_few_shot_compose_example
 
 _client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
@@ -38,16 +38,37 @@ _COMPOSE_FUNCTION = {
         "properties": {
             "decision_reasoning": {
                 "type": "string",
-                "description": "REASONING FIRST. In 1-2 sentences: which single signal is strongest (trigger field, merchant signal, or category beat), and what angle you'll take. Drives the Decision Quality score.",
+                "description": (
+                    "FILL THIS FIRST — the judge reads this field directly for Decision Quality scoring. "
+                    "1-2 sentences: (1) name the SINGLE strongest signal from trigger+merchant+category, "
+                    "(2) state WHY THIS MERCHANT, WHY TODAY specifically, "
+                    "(3) state the exact action you are prescribing. "
+                    "WEAK (scores 4/10): 'Merchant has low orders so I will suggest improvements.' "
+                    "STRONG (scores 10/10): 'Orders -32% MoM + 3 new competitors opened this week + IPL season = "
+                    "merchant risks losing lunch crowd permanently before competitors lock in habits. "
+                    "Prescribing a priced Weekday Thali targeting office lunch crowd + delivery-only BOGO for match nights, "
+                    "this week before the weekend fixtures.' "
+                    "Always derive a non-obvious, time-specific insight — not just a restatement of the trigger."
+                ),
             },
             "key_facts": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of 3-5 specific verifiable facts you will reference in the body (numbers, dates, source citations, named offers). Each MUST exist in the input context.",
+                "description": (
+                    "3-5 specific verifiable facts FROM THE INPUT CONTEXT that appear in the body. "
+                    "Each must contain the exact number/date/name as it appears in context. "
+                    "Example: '38% lower caries recurrence (JIDA Oct 2026, p.14, n=2100 trial)' "
+                    "or 'Orders down 32% MoM (98 vs 145 last month)' or 'Dental Cleaning @ ₹299 (active offer)'. "
+                    "Do NOT invent numbers — if you cannot find it in context, omit that fact."
+                ),
             },
             "body": {
                 "type": "string",
-                "description": "The WhatsApp message. No URLs. Specific, personal, ONE CTA in the last sentence.",
+                "description": (
+                    "The WhatsApp message body. Rules: no URLs, no preambles ('Hope you are well'), "
+                    "specific and personal (use owner name, exact numbers), ONE CTA in the LAST sentence only. "
+                    "Length: 3-5 lines maximum."
+                ),
             },
             "cta": {"type": "string", "enum": ["binary_yes_no", "open_ended", "multi_choice", "none"]},
             "send_as": {"type": "string", "enum": ["vera", "merchant_on_behalf"]},
@@ -70,15 +91,27 @@ _CRITIQUE_FUNCTION = {
             "issues": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Specific issues found (fabrication, weak CTA, missing citation, generic, multiple questions, etc). Empty list if perfect.",
+                "description": (
+                    "Specific issues that reduce any of the 5 scoring dimensions. Check: "
+                    "(1) Decision Quality: is the reasoning generic/restated-trigger, or genuinely contrarian+time-specific? "
+                    "(2) Specificity: any number/date/name NOT verifiable in context? "
+                    "(3) Category Fit: wrong salutation? taboo word? wrong tone register? "
+                    "(4) Merchant Fit: owner name missing? no specific metrics cited? "
+                    "(5) Engagement Compulsion: more than 1 question? CTA not in last sentence? no reason to reply NOW? "
+                    "Empty list only if ALL 5 are genuinely strong."
+                ),
             },
             "improvements_needed": {
                 "type": "boolean",
-                "description": "True if the message has issues that materially hurt scoring.",
+                "description": "True if ANY of the 5 scoring dimensions has an issue that materially hurts the score.",
             },
             "revised_body": {
                 "type": "string",
-                "description": "The revised message body — fix every issue. If improvements_needed=false, copy original body.",
+                "description": (
+                    "Revised message body fixing every issue identified. "
+                    "Keep all correct numbers verbatim — do NOT change any figure that was verified in context. "
+                    "If improvements_needed=false, copy original body exactly."
+                ),
             },
             "revised_cta": {"type": "string", "enum": ["binary_yes_no", "open_ended", "multi_choice", "none"]},
             "revised_rationale": {"type": "string"},
@@ -144,6 +177,7 @@ def _fmt_merchant(m: dict) -> str:
     history = m.get("conversation_history", [])
     agg = m.get("customer_aggregate", {})
     sub = m.get("subscription", {})
+    review_themes = m.get("review_themes", [])
 
     owner = identity.get("owner_first_name") or identity.get("name", "Owner").split()[0]
     active_offers = [o["title"] for o in offers if o.get("status") == "active"]
@@ -151,33 +185,53 @@ def _fmt_merchant(m: dict) -> str:
 
     views_delta = delta.get("views_pct", 0)
     calls_delta = delta.get("calls_pct", 0)
+
+    est_year = identity.get("established_year")
+    identity_line = (
+        "MERCHANT: " + identity.get("name", "Unknown") + " | " + identity.get("locality", "") + ", " + identity.get("city", "")
+        + (" | Est. " + str(est_year) if est_year else "")
+    )
+
     parts = [
-        "MERCHANT: " + identity.get("name", "Unknown") + " | " + identity.get("locality", "") + ", " + identity.get("city", ""),
+        identity_line,
         "Owner first name (USE THIS in salutation): " + owner,
         "Verified: " + str(identity.get("verified", False)) + " | Languages: " + ", ".join(identity.get("languages", ["en"])),
         "Plan: " + sub.get("plan", "N/A") + " (" + str(sub.get("days_remaining", "?")) + " days remaining) | Status: " + sub.get("status", "unknown"),
         "",
         "PERFORMANCE (30d): Views " + str(perf.get("views", 0)) + " (7d: " + (("+" if views_delta >= 0 else "") + str(round(views_delta * 100)) + "%") + ") | "
         "Calls " + str(perf.get("calls", 0)) + " (7d: " + (("+" if calls_delta >= 0 else "") + str(round(calls_delta * 100)) + "%") + ") | "
-        "CTR " + str(round(perf.get("ctr", 0) * 100, 1)) + "% | Directions " + str(perf.get("directions", 0)),
-        "SIGNALS: " + (", ".join(signals) if signals else "none"),
+        "CTR " + str(round(perf.get("ctr", 0) * 100, 1)) + "% | Leads " + str(perf.get("leads", 0)) + " | Directions " + str(perf.get("directions", 0)),
+        "SIGNALS (use these to ground WHY NOW): " + (", ".join(signals) if signals else "none"),
         "",
         "ACTIVE OFFERS (use service+price from here EXACTLY): " + (" | ".join(active_offers) if active_offers else "none"),
     ]
     if expired_offers:
-        parts.append("EXPIRED OFFERS: " + " | ".join(expired_offers))
+        parts.append("EXPIRED OFFERS (can reactivate): " + " | ".join(expired_offers))
     if agg:
-        parts.append(
-            "CUSTOMERS: " + str(agg.get("total_unique_ytd", 0)) + " YTD | Lapsed 180d+: " + str(agg.get("lapsed_180d_plus", 0)) + " | "
-            "6mo retention: " + str(round(agg.get("retention_6mo_pct", 0) * 100)) + "%"
-        )
+        agg_parts = [
+            "Total unique YTD: " + str(agg.get("total_unique_ytd", 0)),
+            "Lapsed 180d+: " + str(agg.get("lapsed_180d_plus", 0)),
+            "6mo retention: " + str(round(agg.get("retention_6mo_pct", 0) * 100)) + "%",
+        ]
         for k, v in agg.items():
             if k.endswith("_count") and isinstance(v, int) and v > 0:
-                parts.append(f"  derived count: {k} = {v}")
+                label = k.replace("_count", "").replace("_", " ")
+                agg_parts.append(label + ": " + str(v))
+        parts.append("CUSTOMER COHORTS: " + " | ".join(agg_parts))
+    if review_themes:
+        parts.append("REVIEW THEMES (cite these when composing — they're from real customer reviews):")
+        for rt in review_themes:
+            sentiment = "POSITIVE" if rt.get("sentiment") == "pos" else "NEGATIVE"
+            parts.append(
+                "  [" + sentiment + "] " + rt.get("theme", "?") + " — " + str(rt.get("occurrences_30d", 0)) + " reviews/30d"
+                + (' | Example: "' + rt.get("common_quote", "") + '"' if rt.get("common_quote") else "")
+            )
     if history:
         parts.append("CONVERSATION HISTORY (last " + str(min(3, len(history))) + " turns):")
         for h in history[-3:]:
-            parts.append("  [" + h.get("from", "?") + "]: " + str(h.get("body", ""))[:120])
+            engagement = h.get("engagement", "")
+            eng_note = " ← " + engagement if engagement else ""
+            parts.append("  [" + h.get("from", "?") + "]: " + str(h.get("body", ""))[:120] + eng_note)
     return "\n".join(parts)
 
 
@@ -189,30 +243,48 @@ def _fmt_category_minimal(cat: dict, merchant_signals: list[str], merchant_agg: 
     catalog = cat.get("offer_catalog", [])
     trend_signals = cat.get("trend_signals", [])
     patient_content = cat.get("patient_content_library", [])
+    reg_auths = cat.get("regulatory_authorities", [])
+    journals = cat.get("professional_journals", [])
 
     ranked_digest = _rank_digest(digest, merchant_signals, merchant_agg)[:3]
 
+    tone_examples = voice.get("tone_examples", [])
+    salutation_examples = voice.get("salutation_examples", [])
     parts = [
         "CATEGORY: " + cat.get("display_name", cat.get("slug", "unknown")),
-        "Voice tone: " + str(voice.get("tone", "neutral")),
+        "Voice tone: " + str(voice.get("tone", "neutral")) + " | Register: " + str(voice.get("register", "")) + " | Code-mix: " + str(voice.get("code_mix", "english")),
+        "Vocab USE (naturally where relevant): " + ", ".join(voice.get("vocab_allowed", [])[:10]),
         "Vocab taboo (NEVER use): " + ", ".join(voice.get("vocab_taboo", [])[:6]),
+    ]
+    if salutation_examples:
+        parts.append("Salutation (USE EXACTLY — e.g. 'Dr. Meera' not 'Hi' or 'Doctor'): " + " | ".join(salutation_examples))
+    if tone_examples:
+        parts.append("Tone examples (write like this): " + " | ".join(tone_examples[:3]))
+    parts += [
         "",
-        "PEER BENCHMARKS: CTR " + str(round(peer.get("avg_ctr", 0) * 100, 1)) + "% | "
+        "PEER BENCHMARKS: Rating " + str(peer.get("avg_rating", 0)) + " | Reviews " + str(peer.get("avg_review_count", 0)) + " | "
+        "CTR " + str(round(peer.get("avg_ctr", 0) * 100, 1)) + "% | "
         "Views/30d " + str(peer.get("avg_views_30d", 0)) + " | Calls/30d " + str(peer.get("avg_calls_30d", 0)) + " | "
         "6mo retention " + str(round(peer.get("retention_6mo_pct", 0) * 100)) + "% | "
         "Avg post every " + str(peer.get("avg_post_freq_days", 14)) + " days",
         "",
         "OFFER CATALOG (use these as-is for service+price): " + " | ".join(o["title"] for o in catalog[:6]),
         "",
-        "TOP-RANKED DIGEST ITEMS (cite these by source ONLY — do NOT invent sources):",
+        "TOP-RANKED DIGEST ITEMS (cite source+title EXACTLY — each has verifiable data you MUST quote):",
     ]
     for item in ranked_digest:
         trial_note = " (n=" + str(item["trial_n"]) + ")" if item.get("trial_n") else ""
         actionable = " | Actionable: " + item["actionable"] if item.get("actionable") else ""
+        seg_note = " | Segment: " + item["patient_segment"] if item.get("patient_segment") else ""
+        summary_note = "\n    Key finding (quote specific numbers): " + item["summary"] if item.get("summary") else ""
         parts.append(
             "  [" + item["id"] + "] " + item["kind"].upper() + ": \"" + item["title"] + "\"" + trial_note
-            + " | Source: " + item.get("source", "unknown") + actionable
+            + " | Source: " + item.get("source", "unknown") + seg_note + actionable + summary_note
         )
+    if reg_auths:
+        parts.append("\nREGULATORY AUTHORITIES (valid citation bodies — cite these for compliance/research): " + " | ".join(reg_auths))
+    if journals:
+        parts.append("PROFESSIONAL JOURNALS (valid citation sources): " + " | ".join(journals))
     if seasonal:
         seasonal_str = " | ".join(s["month_range"] + ": " + s["note"] for s in seasonal)
         parts.append("\nSEASONAL BEATS: " + seasonal_str)
@@ -231,25 +303,44 @@ def _fmt_category_minimal(cat: dict, merchant_signals: list[str], merchant_agg: 
 
 def _fmt_trigger(trg: dict) -> str:
     payload = trg.get("payload", {})
-    return "\n".join([
+    lines = [
         "TRIGGER: kind=" + trg.get("kind", "unknown") + " | scope=" + trg.get("scope", "merchant")
         + " | source=" + trg.get("source", "?") + " | urgency=" + str(trg.get("urgency", 1)) + "/5",
         "Suppression key: " + trg.get("suppression_key", "") + " | Expires: " + trg.get("expires_at", "?"),
         "Payload: " + json.dumps(payload, ensure_ascii=False),
-    ])
+    ]
+    # Format available_slots explicitly for slot-picking CTAs (recall_due, appointment, winback)
+    slots = payload.get("available_slots", [])
+    if slots:
+        slot_str = " | ".join(
+            "Reply " + str(i + 1) + " for " + s.get("label", s.get("iso", "?"))
+            for i, s in enumerate(slots[:4])
+        )
+        lines.append("AVAILABLE SLOTS (use multi_choice CTA with these): " + slot_str)
+    return "\n".join(lines)
 
 
 def _fmt_customer(cust: dict) -> str:
     identity = cust.get("identity", {})
     rel = cust.get("relationship", {})
     prefs = cust.get("preferences", {})
+    consent = cust.get("consent", {})
+    state = cust.get("state", "unknown")
+    state_labels = {
+        "lapsed_soft": "lapsed (soft — visited before, not recently)",
+        "lapsed_hard": "lapsed (hard — gone 180d+)",
+        "active": "active regular",
+        "new": "new customer",
+        "at_risk": "at-risk of churning",
+    }
+    ltv = rel.get("lifetime_value")
     return "\n".join([
-        "CUSTOMER: " + identity.get("name", "Unknown") + " | Language pref (MATCH THIS): " + identity.get("language_pref", "en"),
-        "State: " + cust.get("state", "unknown") + " | First visit: " + rel.get("first_visit", "?") + " | "
-        "Last visit: " + rel.get("last_visit", "?") + " | Total visits: " + str(rel.get("visits_total", 0)),
+        "CUSTOMER: " + identity.get("name", "Unknown") + " | Language pref (MATCH THIS EXACTLY): " + identity.get("language_pref", "en"),
+        "State: " + state_labels.get(state, state) + " | Age band: " + str(identity.get("age_band", "unknown")) + " | Senior: " + str(identity.get("is_senior", False)),
+        "First visit: " + rel.get("first_visit", "?") + " | Last visit: " + rel.get("last_visit", "?") + " | Total visits: " + str(rel.get("visits_total", 0)) + (" | LTV: ₹" + str(ltv) if ltv else ""),
         "Services received: " + ", ".join(rel.get("services_received", [])),
-        "Preferred slots: " + prefs.get("preferred_slots", "any"),
-        "Age band: " + str(identity.get("age_band", "")) + " | Senior: " + str(identity.get("is_senior", False)),
+        "Preferred slots: " + prefs.get("preferred_slots", "any") + " | Reminder opt-in: " + str(prefs.get("reminder_opt_in", True)),
+        "Consent scope: " + ", ".join(consent.get("scope", [])),
     ])
 
 
@@ -351,23 +442,26 @@ def _validate_facts(body: str, key_facts: list[str], category: dict, merchant: d
 # ─── LLM calls ────────────────────────────────────────────────────────────────
 
 async def _compose_one_pass(system: str, user_msg: str, max_tokens: int = 700,
-                           temperature: float = 1.0) -> Optional[dict]:
+                           temperature: float = 1.0,
+                           few_shot_messages: Optional[list] = None) -> Optional[dict]:
+    messages = [{"role": "system", "content": system}]
+    if few_shot_messages:
+        messages.extend(few_shot_messages)
+    messages.append({"role": "user", "content": user_msg})
     try:
         resp = await asyncio.wait_for(
             _client.chat.completions.create(
                 model=COMPOSE_MODEL,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_msg},
-                ],
+                messages=messages,
                 tools=[{"type": "function", "function": _COMPOSE_FUNCTION}],
                 tool_choice={"type": "function", "function": {"name": "compose_message"}},
             ),
             timeout=22.0,
         )
-    except Exception:
+    except Exception as e:
+        print(f"[VERA][compose_one_pass ERROR] {type(e).__name__}: {e}", flush=True)
         return None
     if resp.choices[0].message.tool_calls:
         tc = resp.choices[0].message.tool_calls[0]
@@ -376,6 +470,29 @@ async def _compose_one_pass(system: str, user_msg: str, max_tokens: int = 700,
         except Exception:
             return None
     return None
+
+
+def _build_few_shot_messages(category_slug: str, trigger_kind: str) -> list:
+    """Build few-shot message pairs for injection into compose calls."""
+    example = get_few_shot_compose_example(category_slug, trigger_kind)
+    if not example:
+        return []
+    return [
+        {"role": "user", "content": example["input"]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "call_fewshot_1",
+                "type": "function",
+                "function": {
+                    "name": "compose_message",
+                    "arguments": json.dumps(example["output"], ensure_ascii=False),
+                },
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_fewshot_1", "content": "accepted"},
+    ]
 
 
 async def _critique_and_revise(composed: dict, system: str, user_msg: str, issues: list[str]) -> Optional[dict]:
@@ -432,7 +549,8 @@ Call critique_and_revise.
             ),
             timeout=25.0,
         )
-    except Exception:
+    except Exception as e:
+        print(f"[VERA][critique ERROR] {type(e).__name__}: {e}", flush=True)
         return None
 
     if resp.choices[0].message.tool_calls:
@@ -472,9 +590,20 @@ async def compose_proactive(
     if customer:
         parts.append(_fmt_customer(customer))
     if now:
-        parts.append("CURRENT TIME: " + now)
+        try:
+            from datetime import datetime, timezone as _tz
+            dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+            ist_offset = 19800  # IST = UTC+5:30
+            from datetime import timedelta
+            dt_ist = dt + timedelta(seconds=ist_offset)
+            day_name = dt_ist.strftime("%A")
+            parts.append("CURRENT TIME: " + now + " (" + day_name + ", IST " + dt_ist.strftime("%H:%M") + ")")
+        except Exception:
+            parts.append("CURRENT TIME: " + now)
     parts.append("Now compose the message. Fill decision_reasoning + key_facts BEFORE body.")
     user_msg = "\n\n".join(parts)
+
+    few_shot = _build_few_shot_messages(cat_slug, trg_kind)
 
     async with _get_sem():
         # Always best-of-2 with temperature diversity:
@@ -483,8 +612,8 @@ async def compose_proactive(
         # Both run in parallel (same wall-clock cost as a single call).
         # Validator picks the cleaner candidate; critique fixes the winner.
         candidates = await asyncio.gather(
-            _compose_one_pass(system, user_msg, temperature=0.7),
-            _compose_one_pass(system, user_msg, temperature=1.1),
+            _compose_one_pass(system, user_msg, temperature=0.7, few_shot_messages=few_shot),
+            _compose_one_pass(system, user_msg, temperature=1.1, few_shot_messages=few_shot),
         )
         candidates = [c for c in candidates if c]
         if not candidates:
@@ -522,6 +651,7 @@ async def compose_reply(
     message: str,
     turn_number: int,
     customer: Optional[dict] = None,
+    from_role: str = "merchant",
 ) -> dict:
     cat_slug = category.get("slug", "") if category else ""
     voice = get_voice(cat_slug)
@@ -530,9 +660,12 @@ async def compose_reply(
         "[" + str(i + 1) + "] " + t["role"].upper() + ": " + t["body"]
         for i, t in enumerate(conversation.get("turns", []))
     )
+
+    sender_label = "customer" if from_role == "customer" else "merchant"
     parts = [
         "CONVERSATION SO FAR:\n" + turns_text,
-        "NEW MESSAGE (turn " + str(turn_number) + ", from merchant): " + message,
+        "NEW MESSAGE (turn " + str(turn_number) + ", from " + sender_label + "): " + message,
+        "FROM_ROLE: " + from_role + (" — reply DIRECTLY to the customer (use their name, confirm their request to them). Do NOT address the merchant in this reply." if from_role == "customer" else " — reply as Vera to the merchant."),
         "AUTO-REPLY COUNT so far: " + str(conversation.get("auto_reply_count", 0)),
         "TRIGGER that started this conversation: " + conversation.get("trigger_id", "unknown"),
         _fmt_merchant(merchant) if merchant else "",

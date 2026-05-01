@@ -711,9 +711,8 @@ CURRENT TIME: 2026-04-30T09:30:00Z (Thursday, IST 15:00)""",
 }
 
 
-def get_few_shot_compose_example(category_slug: str, trigger_kind: str) -> Optional[dict]:
+def get_few_shot_compose_example(category_slug: str, trigger_kind: str) -> "dict | None":
     """Return the best matching few-shot example. Exact match → category match → trigger match → None."""
-    from typing import Optional
     normalized = _KIND_ALIASES.get(trigger_kind, trigger_kind)
     # Exact match
     ex = _FEW_SHOT_COMPOSE_EXAMPLES.get((category_slug, trigger_kind))

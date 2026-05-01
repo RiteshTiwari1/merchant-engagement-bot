@@ -237,6 +237,8 @@ def _fmt_merchant(m: dict) -> str:
 
 def _fmt_category_minimal(cat: dict, merchant_signals: list[str], merchant_agg: dict) -> str:
     voice = cat.get("voice", {})
+    if isinstance(voice, str):
+        voice = {"tone": voice}  # flat string fallback (e.g. 'lively_commercial')
     peer = cat.get("peer_stats", {})
     digest = cat.get("digest", [])
     seasonal = cat.get("seasonal_beats", [])

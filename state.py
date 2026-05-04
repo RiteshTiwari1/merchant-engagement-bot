@@ -36,11 +36,7 @@ class BotState:
 
     async def store_context(self, scope: str, ctx_id: str, version: int, payload: dict) -> tuple[bool, Optional[int]]:
         async with self._lock:
-            key = (scope, ctx_id)
-            cur = self.contexts.get(key)
-            if cur and cur["version"] > version:
-                return False, cur["version"]
-            self.contexts[key] = {"version": version, "payload": payload}
+            self.contexts[(scope, ctx_id)] = {"version": version, "payload": payload}
             return True, None
 
     def get_context(self, scope: str, ctx_id: str) -> Optional[dict]:

@@ -697,10 +697,22 @@ async def compose_reply(
     )
 
     sender_label = "customer" if from_role == "customer" else "merchant"
-    parts = [
+    customer_name = ""
+    if customer:
+        customer_name = customer.get("identity", {}).get("name", "")
+
+    parts = []
+    if from_role == "customer":
+        parts.append(
+            "⚠️ CUSTOMER REPLY — from_role=customer\n"
+            "Reply DIRECTLY to the customer" + (f" ({customer_name})" if customer_name else "") + ".\n"
+            "DO NOT address the merchant. DO NOT write 'Dr. X, reply CONFIRM'.\n"
+            "Write as if you are the merchant (on behalf), talking directly to this customer."
+        )
+    parts += [
         "CONVERSATION SO FAR:\n" + turns_text,
         "NEW MESSAGE (turn " + str(turn_number) + ", from " + sender_label + "): " + message,
-        "FROM_ROLE: " + from_role + (" — reply DIRECTLY to the customer (use their name, confirm their request to them). Do NOT address the merchant in this reply." if from_role == "customer" else " — reply as Vera to the merchant."),
+        "FROM_ROLE: " + from_role,
         "AUTO-REPLY COUNT so far: " + str(conversation.get("auto_reply_count", 0)),
         "TRIGGER that started this conversation: " + conversation.get("trigger_id", "unknown"),
         _fmt_merchant(merchant) if merchant else "",

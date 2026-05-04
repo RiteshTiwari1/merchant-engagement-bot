@@ -118,8 +118,6 @@ async def tick(body: TickBody):
             continue
         if state.is_merchant_blocked(merchant_id):
             continue
-        if state.has_active_conversation(merchant_id):
-            continue
 
         merchant = state.get_context("merchant", merchant_id)
         if not merchant:
@@ -276,9 +274,11 @@ async def reply(body: ReplyBody):
         response["cta"] = action.get("cta", "open_ended")
     elif act == "wait":
         response["wait_seconds"] = action.get("wait_seconds", 3600)
-    elif act == "end" and action.get("body", "").strip():
-        # Include polite closing body when LLM provides one (e.g. hostile/off-topic acknowledgment)
-        response["body"] = action["body"].strip()
+    elif act == "end":
+        polite_body = action.get("body", "").strip()
+        if not polite_body:
+            polite_body = "Closing this for now — feel free to reach out anytime. 🙏"
+        response["body"] = polite_body
     return response
 
 

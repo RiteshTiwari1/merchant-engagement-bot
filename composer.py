@@ -17,6 +17,11 @@ _client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 COMPOSE_MODEL = "gpt-4.1"
 CRITIQUE_MODEL = "gpt-4.1"
 REPLY_MODEL = "gpt-4.1"
+REASON_MODEL = "gpt-4o-mini"
+
+_PRE_REASON_SYSTEM = """You are a merchant growth analyst. Given context, output exactly 2 sentences:
+SIGNAL: [specific number/date from context]. PRESCRIBE: [non-obvious action the merchant must do THIS WEEK].
+Rules: cite exact numbers, name the owner, be contrarian (if obvious=promo, say why wrong and what instead)."""
 
 _sem: Optional[asyncio.Semaphore] = None
 
@@ -443,7 +448,7 @@ def _validate_facts(body: str, key_facts: list[str], category: dict, merchant: d
 
 # ─── LLM calls ────────────────────────────────────────────────────────────────
 
-async def _compose_one_pass(system: str, user_msg: str, max_tokens: int = 700,
+async def _compose_one_pass(system: str, user_msg: str, max_tokens: int = 550,
                            temperature: float = 1.0,
                            few_shot_messages: Optional[list] = None) -> Optional[dict]:
     messages = [{"role": "system", "content": system}]
@@ -497,6 +502,28 @@ def _build_few_shot_messages(category_slug: str, trigger_kind: str) -> list:
     ]
 
 
+async def _pre_reason(user_msg: str) -> str:
+    """Fast focused reasoning pass — derives WHY TODAY + non-obvious action before compose."""
+    try:
+        resp = await asyncio.wait_for(
+            _client.chat.completions.create(
+                model=REASON_MODEL,
+                max_tokens=80,
+                temperature=0.2,
+                messages=[
+                    {"role": "system", "content": _PRE_REASON_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ],
+            ),
+            timeout=6.0,
+        )
+        content = resp.choices[0].message.content or ""
+        return content.strip()
+    except Exception as e:
+        print(f"[VERA][pre_reason ERROR] {type(e).__name__}: {e}", flush=True)
+        return ""
+
+
 async def _critique_and_revise(composed: dict, system: str, user_msg: str, issues: list[str]) -> Optional[dict]:
     """Run critique-and-revise pass. Returns revised composed dict (with original metadata)."""
     critique_prompt = system + """
@@ -541,7 +568,7 @@ Call critique_and_revise.
         resp = await asyncio.wait_for(
             _client.chat.completions.create(
                 model=CRITIQUE_MODEL,
-                max_tokens=600,
+                max_tokens=450,
                 messages=[
                     {"role": "system", "content": critique_prompt},
                     {"role": "user", "content": user_with_prev},
@@ -549,7 +576,7 @@ Call critique_and_revise.
                 tools=[{"type": "function", "function": _CRITIQUE_FUNCTION}],
                 tool_choice={"type": "function", "function": {"name": "critique_and_revise"}},
             ),
-            timeout=25.0,
+            timeout=20.0,
         )
     except Exception as e:
         print(f"[VERA][critique ERROR] {type(e).__name__}: {e}", flush=True)
@@ -607,15 +634,21 @@ async def compose_proactive(
 
     few_shot = _build_few_shot_messages(cat_slug, trg_kind)
 
+    # Pre-reason OUTSIDE semaphore — all triggers run their pre_reason concurrently
+    # with zero semaphore contention. Adds ~0s to wall clock on multi-trigger ticks.
+    insight = await _pre_reason(user_msg)
+    enriched_msg = (
+        user_msg
+        + "\n\nEXPERT ANALYSIS (use this as the foundation of your decision_reasoning — "
+        "build on it with specifics from the context above):\n"
+        + insight
+    ) if insight else user_msg
+
     async with _get_sem():
-        # Always best-of-2 with temperature diversity:
-        # t=0.7 → focused, lower hallucination risk
-        # t=1.1 → creative, higher engagement compulsion variance
-        # Both run in parallel (same wall-clock cost as a single call).
-        # Validator picks the cleaner candidate; critique fixes the winner.
+        # Best-of-2 with temperature diversity — both use enriched message with expert insight.
         candidates = await asyncio.gather(
-            _compose_one_pass(system, user_msg, temperature=0.7, few_shot_messages=few_shot),
-            _compose_one_pass(system, user_msg, temperature=1.1, few_shot_messages=few_shot),
+            _compose_one_pass(system, enriched_msg, temperature=0.7, few_shot_messages=few_shot),
+            _compose_one_pass(system, enriched_msg, temperature=1.1, few_shot_messages=few_shot),
         )
         candidates = [c for c in candidates if c]
         if not candidates:

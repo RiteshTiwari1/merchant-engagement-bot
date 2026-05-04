@@ -66,16 +66,18 @@ async def metadata():
     return {
         "team_name": os.environ.get("TEAM_NAME", "Solo"),
         "team_members": [os.environ.get("TEAM_NAME", "Solo")],
-        "model": "gpt-4.1 (two-pass: compose + critique)",
+        "model": "gpt-4.1 (three-pass: pre-reason + compose + critique)",
         "approach": (
-            "Two-pass composition: gpt-4.1 first draft + gpt-4.1 critique-and-revise. "
+            "Three-pass composition: gpt-4o-mini pre-reason (WHY TODAY + non-obvious action) → "
+            "best-of-2 gpt-4.1 compose (temperature diversity, few-shot examples) → gpt-4.1 critique-and-revise. "
             "Per-category voice prompts (5 distinct voices) + per-trigger-kind playbooks. "
             "Forced reasoning fields (decision_reasoning, key_facts) before body — drives Decision Quality. "
             "Deterministic fact validator (numbers/citations checked vs input context) catches fabrications. "
             "Digest items pre-ranked by merchant signal alignment. "
             "Auto-reply detection (pattern + consecutive-repeat). Intent transition handler. "
             "Hindi-English code-mix for warm contexts; English for analytical. "
-            "Customer-facing flow uses merchant voice (not Vera's) with explicit identity opener."
+            "Customer-facing flow uses merchant voice (not Vera's) with explicit identity opener. "
+            "from_role=customer routing: bot replies directly to customer, not back to merchant."
         ),
         "contact_email": os.environ.get("CONTACT_EMAIL", ""),
         "version": "1.0.0",

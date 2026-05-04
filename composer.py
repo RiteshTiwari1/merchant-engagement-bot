@@ -427,7 +427,10 @@ def _validate_facts(body: str, key_facts: list[str], category: dict, merchant: d
             issues.append(f"Citation '{cit}' not in input context — likely fabricated.")
 
     # Check for taboo words
-    taboos = category.get("voice", {}).get("vocab_taboo", [])
+    voice_raw = category.get("voice", {})
+    if isinstance(voice_raw, str):
+        voice_raw = {}
+    taboos = voice_raw.get("vocab_taboo", [])
     for taboo in taboos:
         if taboo.lower() in body.lower():
             issues.append(f"Taboo word '{taboo}' for category — penalty.")
